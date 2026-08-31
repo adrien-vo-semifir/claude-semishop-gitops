@@ -1,0 +1,70 @@
+# ==================================================================
+# validate.yml - le depot GitOps se defend tout seul (etape 4 du TD)
+# A chaque push et a chaque pull request, GitHub loue une machine et
+# verifie que les manifests de k8s/ sont des objets Kubernetes valides
+# ET qu'aucun Secret n'y a ete commite. Verdict vert ou rouge, AVANT
+# qu'Argo CD ne deploie quoi que ce soit.
+# AUCUN identifiant AWS ici : cette CI lit du YAML, elle ne parle
+# jamais au cluster ni au cloud (regle 3 du TD).
+#
+# A copier tel quel dans votre depot GitOps :
+#   .github/workflows/validate.yml
+# ==================================================================
+
+# Le nom affiche dans l'onglet Actions de GitHub.
+name: validate
+
+# Les declencheurs : QUAND ce workflow se lance.
+on:
+  push: # a chaque commit pousse...
+    branches: ["main"] # ...sur la branche que Argo CD suit
+  pull_request: # et a chaque pull request - la CI relit la PROPOSITION
+
+# Droits accordes au workflow : lecture du depot, rien d'autre.
+# Le moindre privilege vaut aussi pour les robots (reflexe du TD 1).
+permissions:
+  contents: read
+
+jobs:
+  # Un seul job : "controle". La premiere etape qui echoue arrete
+  # le job et le passe au rouge.
+  controle:
+    # La machine louee par GitHub, neuve a chaque run, detruite apres.
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Recuperer le code du depot sur la machine (sans checkout,
+      #    la machine est vide : elle ne connait pas vos manifests).
+      - name: recuperer le code
+        uses: actions/checkout@v7
+
+      # 2. Gate "zero secret" : le depot est PUBLIC (regle 2 du TD).
+      #    Un objet Secret commite dans k8s/ passe le job au rouge -
+      #    grep sort en 0 s'il trouve, donc on inverse le verdict.
+      - name: refuser tout Secret commite
+        run: |
+          if grep -rn "kind: Secret" k8s/; then
+            echo "ERREUR : un Secret est versionne dans k8s/ - regle 2 du TD."
+            exit 1
+          fi
+          echo "OK : aucun Secret dans k8s/."
+
+      # 3. Installer kubeconform, le validateur de manifests : il
+      #    confronte chaque YAML au schema officiel de son objet
+      #    Kubernetes (champs requis, types, champs inconnus).
+      #    Version epinglee (regle 4), binaire officiel des releases.
+      - name: installer kubeconform 0.8.0
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      # 4. Gate de validite : -strict refuse les champs inconnus (la
+      #    faute de frappe classique : "replica" au lieu de "replicas"
+      #    dans un champ libre) ; -summary affiche le bilan chiffre.
+      #    kubeconform lit les fichiers, il ne contacte AUCUN cluster :
+      #    c'est ce qui permet une CI sans le moindre credential.
+      - name: valider les manifests k8s/
+        run: kubeconform -strict -summary k8s/

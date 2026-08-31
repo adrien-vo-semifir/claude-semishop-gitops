@@ -1,0 +1,71 @@
+# TD 2 - etape 7 : le service inventory de SemiShop (SOLUTION)
+# Adapte du corrige TP 5.1 du cursus : namespace semishop, image ECR partagee,
+# identite non-root imposee PAR LE MANIFEST (runAsUser) - le pod demarre donc
+# meme si l'image de reference n'embarque pas d'instruction USER.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory
+  namespace: semishop
+  labels:
+    app: inventory
+    app.kubernetes.io/name: inventory
+    app.kubernetes.io/part-of: semishop
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inventory
+  template:
+    metadata:
+      labels:
+        app: inventory
+    spec:
+      securityContext:
+        runAsNonRoot: true          # refuse tout demarrage en root
+        runAsUser: 10001            # identite imposee par le manifest, quelle que soit l'image
+      containers:
+        - name: api
+          # Tag au PRENOM : le registre ECR est partage par tout le groupe
+          image: 039497794217.dkr.ecr.eu-west-3.amazonaws.com/semishop:adrien-1.0.0
+          ports:
+            - containerPort: 8085
+          securityContext:          # ecart residuel vers "restricted" comble
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"       # mebioctets : jamais "128m"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          # STARTUP : laisse jusqu'a 150 s au demarrage (schema + seed en base)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            failureThreshold: 30
+            periodSeconds: 5
+          # READINESS : gate le trafic (echec -> pod NotReady, pas de redemarrage)
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            periodSeconds: 10
+            failureThreshold: 3
+          # LIVENESS : redemarre un conteneur fige
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8085
+            periodSeconds: 20
+            failureThreshold: 3
+          envFrom:
+            - configMapRef:
+                name: inventory-config
+            - secretRef:
+                name: inventory-secrets   # cree en CLI a l'etape 7, JAMAIS versionne

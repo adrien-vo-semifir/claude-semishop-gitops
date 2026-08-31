@@ -1,0 +1,85 @@
+# ==================================================================
+# bump-image.yml - changer de version d'image = un commit trace,
+# ecrit par la CI (etape 4 du TD).
+# Declenchement MANUEL (workflow_dispatch) avec un parametre : le
+# nouveau tag. Le workflow remplace le tag dans le deployment
+# d'inventory, commite en tant que github-actions[bot], pousse -
+# et Argo CD fait le reste. Aucun kubectl, aucune cle AWS : la CI
+# ne touche que du texte dans Git.
+#
+# A copier tel quel dans votre depot GitOps :
+#   .github/workflows/bump-image.yml
+# ==================================================================
+
+name: bump-image
+
+on:
+  # Declencheur manuel : bouton "Run workflow" dans l'onglet Actions,
+  # ou "gh workflow run bump-image -f tag=..." depuis le terminal.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Nouveau tag d'image (ex: adrien-2.0.0)"
+        required: true
+        type: string
+
+# Ce workflow ECRIT dans le depot (un commit) : il lui faut le droit
+# d'ecriture sur le contenu - et rien d'autre. Sans cette ligne, le
+# push du bot serait refuse (403) : le GITHUB_TOKEN par defaut est
+# en lecture seule.
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Recuperer le depot. Le checkout laisse en place le
+      #    GITHUB_TOKEN du run : c'est lui qui autorisera le push.
+      - name: recuperer le code
+        uses: actions/checkout@v7
+
+      # 2. Controler le parametre AVANT de s'en servir. L'input passe
+      #    par une variable d'environnement (env:), jamais interpole
+      #    directement dans le script : un parametre contenant du code
+      #    shell serait sinon execute tel quel (l'injection de script,
+      #    documentee dans le durcissement GitHub Actions).
+      - name: verifier le format du tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^[a-z0-9][a-z0-9.-]*$'; then
+            echo "ERREUR : tag invalide ($TAG) - attendu <prenom>-<version>, minuscules."
+            exit 1
+          fi
+          echo "Tag accepte : $TAG"
+
+      # 3. Remplacer le tag dans le manifest. Le sed capture toute la
+      #    ligne image jusqu'a "semishop:" et remplace ce qui suit par
+      #    le nouveau tag. Le grep affiche la ligne obtenue dans le
+      #    log du run : la preuve de ce qui a change, lisible.
+      - name: remplacer le tag dans k8s/deployment-inventory.yaml
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          sed -i -E "s|(image: .+/semishop:).+|\1${TAG}|" k8s/deployment-inventory.yaml
+          grep -n "image:" k8s/deployment-inventory.yaml
+
+      # 4. Committer et pousser, sous l'identite du bot GitHub Actions
+      #    (l'auteur affiche dans l'historique : github-actions[bot]).
+      #    Si le tag demande est deja celui du fichier, il n'y a rien
+      #    a committer : le workflow s'arrete proprement en vert.
+      - name: committer et pousser (github-actions bot)
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/deployment-inventory.yaml
+          if git diff --cached --quiet; then
+            echo "Le tag demande est deja en place : rien a committer."
+            exit 0
+          fi
+          git commit -m "ci: bump image inventory -> ${TAG}"
+          git push
