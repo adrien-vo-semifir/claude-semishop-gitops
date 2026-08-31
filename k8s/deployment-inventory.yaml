@@ -27,7 +27,7 @@ spec:
       containers:
         - name: api
           # Tag au PRENOM : le registre ECR est partage par tout le groupe
-          image: 039497794217.dkr.ecr.eu-west-3.amazonaws.com/semishop:adrien-1.0.0
+          image: 039497794217.dkr.ecr.eu-west-3.amazonaws.com/semishop:claude-2.0.0
           ports:
             - containerPort: 8085
           securityContext:          # ecart residuel vers "restricted" comble
